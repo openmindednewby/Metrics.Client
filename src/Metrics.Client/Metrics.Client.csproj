@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Metrics.Client</RootNamespace>
+    <PackageId>Metrics.Client</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="prometheus-net.AspNetCore" Version="8.2.1" />
+    <!-- Provides ICanaryRunContext so the canary-only counter can branch on
+         auth-validated canary state (not mere header presence). -->
+    <PackageReference Include="Canary.AspNetCore" Version="1.0.0" />
+  </ItemGroup>
+
+  <!-- Exposes the internal ServiceName seam to the test project only. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Metrics.Client.Tests" />
+  </ItemGroup>
+
+</Project>
