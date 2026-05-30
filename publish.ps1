@@ -145,6 +145,22 @@ try {
   $artifactsDir = Join-Path $repoRoot "artifacts"
   New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
+  # Step 0: Clean — wipe bin/obj so the Build step rebuilds from source.
+  # Without this, dotnet's incremental cache can skip CoreCompile when output
+  # timestamps already exceed the (edited) source timestamps, silently packing
+  # a stale DLL into the new-version nupkg. Bit us during the Phase 3 cutover
+  # (Bff.AspNetCore@1.2.1 shipped without the X-Realm fix; 1.2.2 was burned to
+  # work around it). A few seconds of clean buys deterministic builds.
+  Write-Host "Step 0: Cleaning previous outputs..." -ForegroundColor Yellow
+  dotnet clean $packTarget -c Release --verbosity quiet | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "dotnet clean failed" }
+  # Belt + suspenders: also wipe bin/obj that `dotnet clean` may leave behind
+  # when it falls back to a project-level rather than file-level clean.
+  Get-ChildItem -Path $repoRoot -Recurse -Force -Directory -ErrorAction SilentlyContinue `
+    | Where-Object { $_.Name -in @('bin','obj') } `
+    | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  Write-Host ""
+
   # Step 1: Restore
   Write-Host "Step 1: Restoring dependencies..." -ForegroundColor Yellow
   dotnet restore $packTarget
