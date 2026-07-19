@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Canary.AspNetCore.Context;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Prometheus;
 
 namespace Metrics.Client.Middleware;
@@ -75,14 +76,32 @@ public sealed class HttpMetricsMiddleware
     /// Processes the HTTP request, recording metrics before and after execution.
     /// </summary>
     /// <param name="context">The current HTTP context.</param>
-    /// <param name="canaryContext">
-    /// The scoped canary run context, injected per-request by the DI container.
-    /// Populated by <c>CanaryAuthMiddleware</c> (which runs INSIDE this middleware
-    /// — <c>UsePrometheusMetrics()</c> is registered before <c>UseCanaryAuth()</c>),
-    /// so by the time the <c>finally</c> block reads it, canary tagging has
-    /// already happened for this request.
-    /// </param>
-    public async Task InvokeAsync(HttpContext context, ICanaryRunContext canaryContext)
+    /// <remarks>
+    /// <para>
+    /// <see cref="ICanaryRunContext"/> is resolved from
+    /// <see cref="HttpContext.RequestServices"/> INSIDE this method rather than
+    /// declared as a DI-injected <c>InvokeAsync</c> parameter. ASP.NET Core
+    /// resolves such parameters with <c>GetRequiredService</c> BEFORE the method
+    /// body runs, which made <c>Canary.AspNetCore</c> a hard, unstated
+    /// requirement of this package: a service that called
+    /// <c>AddPrometheusMetrics()</c> without also calling <c>AddCanaryAuth()</c>
+    /// threw <see cref="InvalidOperationException"/> on EVERY request — including
+    /// <c>/health/live</c> and <c>/metrics</c>, because the skip logic below sits
+    /// after the resolution point. Resolving here, null-tolerantly and after the
+    /// skips, makes the canary integration genuinely optional.
+    /// </para>
+    /// <para>
+    /// For services that DO call <c>AddCanaryAuth()</c> the behaviour is
+    /// unchanged: parameter injection resolved from this same
+    /// <see cref="HttpContext.RequestServices"/> scope, so the instance obtained
+    /// here is the identical scoped <c>CanaryRunContext</c> the middleware
+    /// previously received. It is populated by <c>CanaryAuthMiddleware</c>, which
+    /// runs INSIDE this middleware (<c>UsePrometheusMetrics()</c> is registered
+    /// before <c>UseCanaryAuth()</c>), so by the time the <c>finally</c> block
+    /// reads it, canary tagging has already happened for this request.
+    /// </para>
+    /// </remarks>
+    public async Task InvokeAsync(HttpContext context)
     {
         // Skip metrics endpoint itself to avoid recursion
         if (context.Request.Path.StartsWithSegments("/metrics"))
@@ -97,6 +116,11 @@ public sealed class HttpMetricsMiddleware
             await _next(context);
             return;
         }
+
+        // Resolved AFTER the /metrics + /health skips and null-tolerantly, so a
+        // consumer that has not wired Canary.AspNetCore still gets a working
+        // service (and working health probes) rather than a 500 on every request.
+        var canaryContext = context.RequestServices?.GetService<ICanaryRunContext>();
 
         var stopwatch = Stopwatch.StartNew();
         HttpRequestsInFlight.WithLabels(ServiceName).Inc();
@@ -127,7 +151,7 @@ public sealed class HttpMetricsMiddleware
             // canary requests, NOT mere header presence. No endpoint label,
             // so this stays low-cardinality. Follows the same /metrics + /health
             // skip logic above (those paths return early before reaching here).
-            if (canaryContext.IsCanary)
+            if (canaryContext?.IsCanary == true)
             {
                 CanaryHttpRequestsTotal
                     .WithLabels(ServiceName, method, statusCode)

@@ -3,6 +3,7 @@ using Canary.AspNetCore.Context;
 using Metrics.Client.Extensions;
 using Metrics.Client.Middleware;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Prometheus;
 using Shouldly;
 
@@ -34,11 +35,11 @@ public sealed class HttpMetricsMiddlewareTests
     {
         var serviceName = UniqueServiceName();
         HttpMetricsMiddleware.ServiceName = serviceName;
-        var context = BuildContext(path: "/api/v1/templates", method: "GET", statusCode: 200);
         var canary = ActivatedCanaryContext();
+        var context = BuildContext(path: "/api/v1/templates", method: "GET", statusCode: 200, canary);
         var middleware = BuildMiddleware();
 
-        await middleware.InvokeAsync(context, canary);
+        await middleware.InvokeAsync(context);
 
         var scrape = await ScrapeAsync();
         CanaryCounterValue(scrape, serviceName, "GET", "200").ShouldBe(1);
@@ -49,11 +50,11 @@ public sealed class HttpMetricsMiddlewareTests
     {
         var serviceName = UniqueServiceName();
         HttpMetricsMiddleware.ServiceName = serviceName;
-        var context = BuildContext(path: "/api/v1/templates", method: "GET", statusCode: 200);
         var canary = new CanaryRunContext(); // IsCanary == false
+        var context = BuildContext(path: "/api/v1/templates", method: "GET", statusCode: 200, canary);
         var middleware = BuildMiddleware();
 
-        await middleware.InvokeAsync(context, canary);
+        await middleware.InvokeAsync(context);
 
         var scrape = await ScrapeAsync();
         // The series must not exist at all for this unique service name.
@@ -65,11 +66,11 @@ public sealed class HttpMetricsMiddlewareTests
     {
         var serviceName = UniqueServiceName();
         HttpMetricsMiddleware.ServiceName = serviceName;
-        var context = BuildContext(path: "/metrics", method: "GET", statusCode: 200);
         var canary = ActivatedCanaryContext();
+        var context = BuildContext(path: "/metrics", method: "GET", statusCode: 200, canary);
         var middleware = BuildMiddleware();
 
-        await middleware.InvokeAsync(context, canary);
+        await middleware.InvokeAsync(context);
 
         var scrape = await ScrapeAsync();
         CanaryCounterValue(scrape, serviceName, "GET", "200").ShouldBe(0);
@@ -80,11 +81,11 @@ public sealed class HttpMetricsMiddlewareTests
     {
         var serviceName = UniqueServiceName();
         HttpMetricsMiddleware.ServiceName = serviceName;
-        var context = BuildContext(path: "/health/live", method: "GET", statusCode: 200);
         var canary = ActivatedCanaryContext();
+        var context = BuildContext(path: "/health/live", method: "GET", statusCode: 200, canary);
         var middleware = BuildMiddleware();
 
-        await middleware.InvokeAsync(context, canary);
+        await middleware.InvokeAsync(context);
 
         var scrape = await ScrapeAsync();
         CanaryCounterValue(scrape, serviceName, "GET", "200").ShouldBe(0);
@@ -99,11 +100,11 @@ public sealed class HttpMetricsMiddlewareTests
         var middleware = BuildMiddleware();
 
         await middleware.InvokeAsync(
-            BuildContext(path: "/api/v1/orders", method: "POST", statusCode: 201), canary);
+            BuildContext(path: "/api/v1/orders", method: "POST", statusCode: 201, canary));
         await middleware.InvokeAsync(
-            BuildContext(path: "/api/v1/orders/9", method: "DELETE", statusCode: 404), canary);
+            BuildContext(path: "/api/v1/orders/9", method: "DELETE", statusCode: 404, canary));
         await middleware.InvokeAsync(
-            BuildContext(path: "/api/v1/orders/1", method: "POST", statusCode: 201), canary);
+            BuildContext(path: "/api/v1/orders/1", method: "POST", statusCode: 201, canary));
 
         var scrape = await ScrapeAsync();
         CanaryCounterValue(scrape, serviceName, "POST", "201").ShouldBe(2);
@@ -127,8 +128,7 @@ public sealed class HttpMetricsMiddlewareTests
         });
 
         await middleware.InvokeAsync(
-            BuildContext(path: "/api/v1/x", method: "GET", statusCode: 200),
-            ActivatedCanaryContext());
+            BuildContext(path: "/api/v1/x", method: "GET", statusCode: 200, ActivatedCanaryContext()));
 
         nextWasCalled.ShouldBeTrue();
     }
@@ -149,12 +149,26 @@ public sealed class HttpMetricsMiddlewareTests
         return ctx;
     }
 
-    private static HttpContext BuildContext(string path, string method, int statusCode)
+    /// <summary>
+    /// Builds a request context whose <see cref="HttpContext.RequestServices"/>
+    /// contains the given <see cref="ICanaryRunContext"/> — mirroring how a real
+    /// pipeline that called <c>AddCanaryAuth()</c> exposes it. The middleware now
+    /// resolves the context from this scope rather than via <c>InvokeAsync</c>
+    /// parameter injection; see <see cref="HttpMetricsMiddleware"/> remarks.
+    /// </summary>
+    private static HttpContext BuildContext(
+        string path, string method, int statusCode, ICanaryRunContext? canary = null)
     {
         var ctx = new DefaultHttpContext();
         ctx.Request.Path = path;
         ctx.Request.Method = method;
         ctx.Response.StatusCode = statusCode;
+
+        var services = new ServiceCollection();
+        if (canary is not null)
+            services.AddSingleton(canary);
+
+        ctx.RequestServices = services.BuildServiceProvider();
         return ctx;
     }
 

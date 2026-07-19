@@ -54,6 +54,20 @@ Consuming services pick this up automatically — no wiring change is needed
 beyond the existing `UsePrometheusMetrics()` call, provided `UseCanaryAuth()`
 is registered after it (the standard pipeline order).
 
+**The canary integration is optional.** `Canary.AspNetCore` wiring is *not*
+required for this package to work: a service that calls `AddPrometheusMetrics()`
+without `AddCanaryAuth()` records all HTTP metrics normally and simply never
+emits `canary_http_requests_total`.
+
+> **Fixed in 1.2.1.** In 1.2.0 and earlier this was not true. The middleware
+> declared `InvokeAsync(HttpContext, ICanaryRunContext)`, and ASP.NET Core
+> resolves such parameters with `GetRequiredService` *before* the method body
+> runs — so a service wiring metrics but not canary threw
+> `InvalidOperationException` on **every** request, including `/health/live` and
+> `/metrics` (the skip logic for those paths sits after the resolution point).
+> If you are on ≤ 1.2.0, either upgrade or make sure you also call
+> `AddCanaryAuth()`.
+
 ## Configuration
 
 Via `appsettings.json`:
