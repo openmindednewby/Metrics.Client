@@ -33,6 +33,7 @@ namespace Metrics.Client.Tests.Middleware;
 /// happens. Against the unfixed middleware every test in this class throws.
 /// </para>
 /// </remarks>
+[Collection(PrometheusRegistryCollection.Name)]
 public sealed class HttpMetricsMiddlewarePipelineTests
 {
     // -----------------------------------------------------------------------

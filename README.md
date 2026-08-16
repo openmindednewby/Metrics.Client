@@ -24,10 +24,49 @@ await app.RunAsync();
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `http_requests_total` | Counter | service, method, endpoint, status_code | Total HTTP requests processed |
-| `http_request_duration_seconds` | Histogram | service, method, endpoint, status_code | Request duration in seconds |
-| `http_requests_in_flight` | Gauge | service | Currently processing requests |
-| `canary_http_requests_total` | Counter | service, method, status_code | HTTP requests tagged as in-cluster E2E canary traffic |
+| `http_requests_total` | Counter | app, method, http_route, status_code | Total HTTP requests processed |
+| `http_request_duration_seconds` | Histogram | app, method, http_route, status_code | Request duration in seconds |
+| `http_requests_in_flight` | Gauge | app | Currently processing requests |
+| `http_unmatched_requests_total` | Counter | app, method | Requests that matched no route |
+| `canary_http_requests_total` | Counter | app, method, status_code | HTTP requests tagged as in-cluster E2E canary traffic |
+
+## ⚠️ Breaking changes in 2.0.0
+
+**1. Labels renamed: `service` → `app`, `endpoint` → `http_route`.**
+
+Under Kubernetes service discovery, Prometheus attaches its own target labels named
+`service` (the k8s Service) and `endpoint` (the port name). Ours collided, so
+Prometheus silently renamed ours to `exported_service` / `exported_endpoint` — and a
+dashboard grouping by the natural-looking `endpoint` was really bucketing everything
+into the port number `"8080"`. No error; just a wrong, plausible graph. The new names
+cannot collide with Prometheus target labels.
+
+Update queries: `endpoint` (or `exported_endpoint`) → `http_route`;
+`exported_service` → `app`. Note that `sum by (service)` keeps working — that
+resolves to Prometheus' own target label, which this package does not touch.
+
+**2. Unmatched requests no longer record the requested URL.**
+
+`http_route` was previously the RAW request path whenever a request matched no route,
+which made the label unbounded — every 404 URL minted a permanent series at ~14 series
+each (counter + 11 histogram buckets + sum + count). It now records the literal
+`"unmatched"`, and the rate is preserved separately in `http_unmatched_requests_total`.
+Alert on that counter rather than on 404 paths:
+
+```promql
+# a client is calling a route that no longer exists
+sum by (app) (rate(http_unmatched_requests_total[5m])) > 1
+```
+
+**3. prometheus-net's built-in `UseHttpMetrics()` is no longer registered.**
+
+It was registered alongside this package's middleware, so every request was measured
+twice — and since both write `http_request_duration_seconds` under incompatible label
+schemas (`code,method,endpoint` vs ours), the result was ~2x the series *and* a silent
+double-count in any query summing that metric. `http_requests_received_total` and
+`http_requests_in_progress` are therefore no longer emitted; use `http_requests_total`
+and `http_requests_in_flight`. To keep the built-in, call `app.UseHttpMetrics()`
+yourself after `UsePrometheusMetrics()`.
 
 ### Canary traffic
 
@@ -39,15 +78,15 @@ header presence.
 
 It is deliberately a separate series rather than a `canary` label on
 `http_requests_total` (which would double that metric's series count), and
-deliberately omits the `endpoint` label to keep cardinality minimal.
+deliberately omits the `http_route` label to keep cardinality minimal.
 
 This powers a Grafana "Canary Activity" dashboard and lets SLO dashboards
 default-exclude canary noise, e.g.:
 
 ```promql
-# Real (non-canary) request rate per service
-sum by (service) (rate(http_requests_total[5m]))
-  - sum by (service) (rate(canary_http_requests_total[5m]))
+# Real (non-canary) request rate per app
+sum by (app) (rate(http_requests_total[5m]))
+  - sum by (app) (rate(canary_http_requests_total[5m]))
 ```
 
 Consuming services pick this up automatically — no wiring change is needed
@@ -104,6 +143,8 @@ scrape_configs:
 
 ## Design Decisions
 
-- **Low cardinality**: Uses route templates (not raw paths) for endpoint labels
+- **Bounded cardinality**: `http_route` is ALWAYS a route template or the literal
+  `"unmatched"` — never a raw path. This is the invariant the package exists to hold;
+  a raw-path fallback is what made the label unbounded before 2.0.0
 - **Health/metrics excluded**: Health check and metrics endpoints are not tracked to avoid noise
 - **Lightweight**: No-op overhead when requests hit excluded paths

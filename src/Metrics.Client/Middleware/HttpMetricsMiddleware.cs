@@ -15,12 +15,45 @@ public sealed class HttpMetricsMiddleware
 {
     private readonly RequestDelegate _next;
 
+    /// <summary>
+    /// The <c>http_route</c> label value used for any request that did not resolve
+    /// to a <see cref="RouteEndpoint"/> — 404s, and anything short-circuited before
+    /// routing completed.
+    /// </summary>
+    /// <remarks>
+    /// This constant is the cardinality cap. The previous implementation fell back
+    /// to <c>HttpContext.Request.Path</c>, which is the RAW, fully-expanded URL. That
+    /// made the label unbounded: every unmatched URL minted a permanent series, and
+    /// each one costs ~14 (this counter + 11 histogram buckets + sum + count). It was
+    /// not theoretical — live traffic had already leaked GUID-expanded paths such as
+    /// <c>/api/v1/admin/attendees/888acadc-…</c>, growing with every attendee created,
+    /// and a bot scanning 10k URLs would have added ~140k series to a prod Prometheus
+    /// agent that has already OOMKilled once at its 640Mi limit.
+    /// The 404 signal itself is not lost — see <see cref="HttpUnmatchedRequestsTotal"/>.
+    /// </remarks>
+    private const string UnmatchedRoute = "unmatched";
+
     private static readonly Counter HttpRequestsTotal = Prometheus.Metrics.CreateCounter(
         "http_requests_total",
         "Total number of HTTP requests processed.",
         new CounterConfiguration
         {
-            LabelNames = ["service", "method", "endpoint", "status_code"]
+            LabelNames = ["app", "method", "http_route", "status_code"]
+        });
+
+    /// <summary>
+    /// Counts requests that matched no route, WITHOUT recording which URL was asked
+    /// for. Deliberately low-cardinality (no route label) so it can never grow: it
+    /// preserves the one operationally useful signal from the raw-path fallback —
+    /// a 404-rate spike, which is how you notice a client calling a route you renamed
+    /// in a deploy — at a fixed cost of one series per (app, method).
+    /// </summary>
+    private static readonly Counter HttpUnmatchedRequestsTotal = Prometheus.Metrics.CreateCounter(
+        "http_unmatched_requests_total",
+        "Total number of HTTP requests that did not match any route.",
+        new CounterConfiguration
+        {
+            LabelNames = ["app", "method"]
         });
 
     /// <summary>
@@ -39,7 +72,7 @@ public sealed class HttpMetricsMiddleware
         "Total number of HTTP requests processed that were tagged as in-cluster E2E canary traffic (auth-validated X-Canary-Run-Id).",
         new CounterConfiguration
         {
-            LabelNames = ["service", "method", "status_code"]
+            LabelNames = ["app", "method", "status_code"]
         });
 
     private static readonly Histogram HttpRequestDurationSeconds = Prometheus.Metrics.CreateHistogram(
@@ -47,7 +80,7 @@ public sealed class HttpMetricsMiddleware
         "Duration of HTTP requests in seconds.",
         new HistogramConfiguration
         {
-            LabelNames = ["service", "method", "endpoint", "status_code"],
+            LabelNames = ["app", "method", "http_route", "status_code"],
             Buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
         });
 
@@ -56,7 +89,7 @@ public sealed class HttpMetricsMiddleware
         "Number of HTTP requests currently being processed.",
         new GaugeConfiguration
         {
-            LabelNames = ["service"]
+            LabelNames = ["app"]
         });
 
     /// <summary>
@@ -135,17 +168,27 @@ public sealed class HttpMetricsMiddleware
             HttpRequestsInFlight.WithLabels(ServiceName).Dec();
 
             var method = context.Request.Method;
-            var endpoint = NormalizeEndpoint(context);
+            var route = ResolveRoute(context);
             var statusCode = context.Response.StatusCode.ToString();
             var duration = stopwatch.Elapsed.TotalSeconds;
 
             HttpRequestsTotal
-                .WithLabels(ServiceName, method, endpoint, statusCode)
+                .WithLabels(ServiceName, method, route, statusCode)
                 .Inc();
 
             HttpRequestDurationSeconds
-                .WithLabels(ServiceName, method, endpoint, statusCode)
+                .WithLabels(ServiceName, method, route, statusCode)
                 .Observe(duration);
+
+            // The route label is capped at the literal "unmatched", so the URL that
+            // was actually requested is deliberately NOT recorded. This counter keeps
+            // the rate visible without the cardinality.
+            if (string.Equals(route, UnmatchedRoute, StringComparison.Ordinal))
+            {
+                HttpUnmatchedRequestsTotal
+                    .WithLabels(ServiceName, method)
+                    .Inc();
+            }
 
             // Separate canary counter — incremented ONLY for auth-validated
             // canary requests, NOT mere header presence. No endpoint label,
@@ -161,16 +204,21 @@ public sealed class HttpMetricsMiddleware
     }
 
     /// <summary>
-    /// Normalizes the endpoint path to reduce cardinality.
-    /// Uses the route template when available, otherwise the raw path.
+    /// Resolves the BOUNDED route label for a request: the route template when the
+    /// request matched one, otherwise <see cref="UnmatchedRoute"/>.
     /// </summary>
-    private static string NormalizeEndpoint(HttpContext context)
+    /// <remarks>
+    /// The route template (e.g. <c>/api/v1/templates/{id}</c>) is what keeps this
+    /// label finite — 50,000 requests for 50,000 different ids collapse into one
+    /// series. There is deliberately NO raw-path fallback: a request that matched no
+    /// route has no template, and substituting the literal URL is precisely what made
+    /// this label unbounded. See <see cref="UnmatchedRoute"/>.
+    /// </remarks>
+    private static string ResolveRoute(HttpContext context)
     {
-        // Use the route pattern (e.g., /api/v1/templates/{id}) to keep cardinality low
-        var endpoint = context.GetEndpoint();
-        if (endpoint is RouteEndpoint routeEndpoint)
-            return routeEndpoint.RoutePattern.RawText ?? context.Request.Path.Value ?? "/";
+        if (context.GetEndpoint() is RouteEndpoint routeEndpoint)
+            return routeEndpoint.RoutePattern.RawText ?? UnmatchedRoute;
 
-        return context.Request.Path.Value ?? "/";
+        return UnmatchedRoute;
     }
 }

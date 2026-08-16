@@ -52,10 +52,27 @@ public static class MetricsServiceExtensions
     /// </summary>
     /// <param name="app">The web application.</param>
     /// <returns>The app for chaining.</returns>
+    /// <remarks>
+    /// <para>
+    /// prometheus-net's own <c>app.UseHttpMetrics()</c> is deliberately NOT registered
+    /// here. It used to be, alongside <see cref="HttpMetricsMiddleware"/>, so every
+    /// request was measured TWICE — and because both write to the metric name
+    /// <c>http_request_duration_seconds</c> under incompatible label schemas
+    /// (<c>code,method,endpoint</c> vs ours), the result was ~2x the series AND a
+    /// silent double-count in any query that summed the metric.
+    /// </para>
+    /// <para>
+    /// Ours is kept because it is strictly more capable: bounded route-template
+    /// labels, the canary counter, and the unmatched-route cap. Before removing the
+    /// built-in, every consumer class was checked for use of the metrics it uniquely
+    /// provided (<c>http_requests_received_total</c>, <c>http_requests_in_progress</c>):
+    /// 30 live Grafana dashboards, the PrometheusRule CRs, the Prometheus
+    /// recording/alerting rules and the in-repo dashboards — zero references in all four.
+    /// </para>
+    /// </remarks>
     public static WebApplication UsePrometheusMetrics(this WebApplication app)
     {
         app.UseMiddleware<HttpMetricsMiddleware>();
-        app.UseHttpMetrics();
         app.MapMetrics().AllowAnonymous();
 
         return app;

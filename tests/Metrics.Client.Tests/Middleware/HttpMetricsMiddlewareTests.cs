@@ -26,6 +26,7 @@ namespace Metrics.Client.Tests.Middleware;
 /// by constructing the labels directly, mirroring how the production
 /// extension wires it.
 /// </remarks>
+[Collection(PrometheusRegistryCollection.Name)]
 public sealed class HttpMetricsMiddlewareTests
 {
     private const string CanaryMetricName = "canary_http_requests_total";
@@ -109,11 +110,11 @@ public sealed class HttpMetricsMiddlewareTests
         var scrape = await ScrapeAsync();
         CanaryCounterValue(scrape, serviceName, "POST", "201").ShouldBe(2);
         CanaryCounterValue(scrape, serviceName, "DELETE", "404").ShouldBe(1);
-        // Endpoint is intentionally NOT a label on the canary counter — two
+        // The route is intentionally NOT a label on the canary counter — two
         // different POST paths collapse into one series, keeping cardinality
-        // minimal. (The general http_requests_total DOES carry endpoint; we
+        // minimal. (The general http_requests_total DOES carry http_route; we
         // only assert the absence of the label on canary_http_requests_total.)
-        CanaryMetricLines(scrape).ShouldAllBe(line => !line.Contains("endpoint="));
+        CanaryMetricLines(scrape).ShouldAllBe(line => !line.Contains("http_route="));
     }
 
     [Fact]
@@ -195,7 +196,7 @@ public sealed class HttpMetricsMiddlewareTests
         {
             if (!line.StartsWith(CanaryMetricName + "{", StringComparison.Ordinal))
                 continue;
-            if (!line.Contains($"service=\"{service}\"", StringComparison.Ordinal))
+            if (!line.Contains($"app=\"{service}\"", StringComparison.Ordinal))
                 continue;
             if (!line.Contains($"method=\"{method}\"", StringComparison.Ordinal))
                 continue;
