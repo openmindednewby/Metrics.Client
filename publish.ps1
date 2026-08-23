@@ -1,10 +1,15 @@
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)]
   [ValidateSet("patch", "minor", "major")]
   [string]$Bump,
 
-  [Parameter(Mandatory = $true)]
+  # Republish the version already in Directory.Build.props WITHOUT bumping.
+  # With --skip-duplicate this is a safe no-op if that version is already on NuGet.
+  # Use it when the bump landed in an earlier commit (the common case) so the
+  # published version matches what git records.
+  [switch]$NoBump,
+
+  # Optional. If omitted, NUGET_API_KEY is read from SaaS/.env.local (two dirs up).
   [string]$ApiKey
 )
 
@@ -113,16 +118,44 @@ if (-not (Test-Path $propsPath)) {
   throw "Missing file: $propsPath"
 }
 
+if (-not $Bump -and -not $NoBump) {
+  throw "Specify -Bump <patch|minor|major> to bump+publish, or -NoBump to publish the current version."
+}
+
 $packageId = Get-PackageIdFromPropsFile -PropsPath $propsPath
 $currentVersion = Get-VersionFromPropsFile -PropsPath $propsPath
-$targetVersion = Get-BumpedVersion -CurrentVersion $currentVersion -Bump $Bump
+
+# Resolve the API key: explicit -ApiKey wins, else read NUGET_API_KEY from SaaS/.env.local.
+if (-not $ApiKey) {
+  $saasRoot = Split-Path -Parent (Split-Path -Parent $repoRoot)
+  $envFile = Join-Path $saasRoot ".env.local"
+  if (Test-Path $envFile) {
+    $keyLine = Select-String -Path $envFile -Pattern '^NUGET_API_KEY=(.+)$' | Select-Object -First 1
+    if ($keyLine) { $ApiKey = $keyLine.Matches.Groups[1].Value.Trim() }
+  }
+  if (-not $ApiKey) {
+    throw "No -ApiKey given and NUGET_API_KEY not found in $envFile"
+  }
+}
+
+if ($NoBump) {
+  $targetVersion = $currentVersion
+} else {
+  $targetVersion = Get-BumpedVersion -CurrentVersion $currentVersion -Bump $Bump
+}
 
 Write-Host "Building and publishing $packageId package..." -ForegroundColor Cyan
-Write-Host "Version: $currentVersion -> $targetVersion"
+if ($NoBump) {
+  Write-Host "Version: $targetVersion (republish, no bump)"
+} else {
+  Write-Host "Version: $currentVersion -> $targetVersion"
+}
 Write-Host ""
 
-# Update version
-Set-VersionInPropsFile -PropsPath $propsPath -Version $targetVersion
+# Update version (only when bumping; -NoBump ships what's already in props)
+if (-not $NoBump) {
+  Set-VersionInPropsFile -PropsPath $propsPath -Version $targetVersion
+}
 
 try {
   # Find solution or project file
@@ -198,8 +231,10 @@ try {
   }
 }
 catch {
-  # Rollback version on failure
-  Set-VersionInPropsFile -PropsPath $propsPath -Version $currentVersion
-  Write-Warning "Rolled back version change in Directory.Build.props due to failure."
+  if (-not $NoBump) {
+    # Rollback version on failure (only if we changed it)
+    Set-VersionInPropsFile -PropsPath $propsPath -Version $currentVersion
+    Write-Warning "Rolled back version change in Directory.Build.props due to failure."
+  }
   throw
 }
