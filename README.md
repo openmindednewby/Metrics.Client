@@ -131,6 +131,19 @@ builder.AddPrometheusMetrics(opts =>
 });
 ```
 
+### Turning metrics off (since 2.2.0)
+
+`Enabled` and `MetricsPath` are honoured (before 2.2.0 they were bound but never read).
+
+```bash
+Metrics__Enabled=false          # no middleware, no scrape endpoint, no collectors, no Prometheus needed
+Metrics__MetricsPath=/internal/metrics   # serve the scrape endpoint somewhere else
+```
+
+Keep both calls (`AddPrometheusMetrics` + `UsePrometheusMetrics`) in `Program.cs`; the switch
+is config, not code. `UsePrometheusMetrics` without `AddPrometheusMetrics` keeps the old
+defaults (enabled, `/metrics`).
+
 ## Prometheus Scrape Config
 
 ```yaml

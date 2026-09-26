@@ -2,6 +2,7 @@ using Metrics.Client.Configuration;
 using Metrics.Client.Middleware;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Prometheus;
 
@@ -15,6 +16,9 @@ public static class MetricsServiceExtensions
     /// <summary>
     /// Adds Prometheus metrics collection to the application.
     /// Registers HTTP metrics middleware and configures the /metrics scrape endpoint.
+    /// When <see cref="MetricsOptions.Enabled"/> is false (<c>Metrics:Enabled=false</c>)
+    /// nothing is set up: <see cref="UsePrometheusMetrics"/> then adds no middleware and
+    /// maps no scrape endpoint, so the host needs no Prometheus at all.
     /// </summary>
     /// <typeparam name="TBuilder">The host builder type.</typeparam>
     /// <param name="builder">The host application builder.</param>
@@ -35,11 +39,19 @@ public static class MetricsServiceExtensions
         // Apply programmatic overrides
         configure?.Invoke(options);
 
-        // Store service name for the middleware
-        HttpMetricsMiddleware.ServiceName = options.ServiceName;
+        // Read back by UsePrometheusMetrics to decide whether to wire anything.
+        builder.Services.AddSingleton(options);
 
-        // Suppress the default prometheus-net metrics server (we use ASP.NET endpoint mapping)
+        // Suppress the default prometheus-net collectors (process/runtime). Called on the
+        // disabled path too, so an off switch leaves no collector behind.
         Prometheus.Metrics.SuppressDefaultMetrics();
+
+        if (!options.Enabled)
+            return builder;
+
+        // Store service name for the middleware. Touching the middleware type is what
+        // creates its static counters, so the disabled path above must not reach here.
+        HttpMetricsMiddleware.ServiceName = options.ServiceName;
 
         return builder;
     }
@@ -48,7 +60,10 @@ public static class MetricsServiceExtensions
     /// Adds Prometheus HTTP metrics middleware and maps the /metrics scrape endpoint.
     /// Call this after <see cref="AddPrometheusMetrics{TBuilder}"/> in the builder phase.
     /// The /metrics endpoint is marked AllowAnonymous so Prometheus scrapes are not
-    /// rejected by a global authorization fallback policy.
+    /// rejected by a global authorization fallback policy. The endpoint is served at
+    /// <see cref="MetricsOptions.MetricsPath"/>. When metrics are disabled this is a no-op.
+    /// Called without <see cref="AddPrometheusMetrics{TBuilder}"/>, the defaults apply
+    /// (enabled, <c>/metrics</c>), as before.
     /// </summary>
     /// <param name="app">The web application.</param>
     /// <returns>The app for chaining.</returns>
@@ -72,9 +87,18 @@ public static class MetricsServiceExtensions
     /// </remarks>
     public static WebApplication UsePrometheusMetrics(this WebApplication app)
     {
+        var options = app.Services.GetService<MetricsOptions>() ?? new MetricsOptions();
+        if (!options.Enabled)
+            return app;
+
         app.UseMiddleware<HttpMetricsMiddleware>();
-        app.MapMetrics().AllowAnonymous();
+        app.MapMetrics(ResolvePath(options)).AllowAnonymous();
 
         return app;
     }
+
+    private static string ResolvePath(MetricsOptions options) =>
+        string.IsNullOrWhiteSpace(options.MetricsPath) ? DefaultMetricsPath : options.MetricsPath;
+
+    private const string DefaultMetricsPath = "/metrics";
 }
