@@ -41,6 +41,7 @@ public static class MetricsServiceExtensions
 
         // Read back by UsePrometheusMetrics to decide whether to wire anything.
         builder.Services.AddSingleton(options);
+        builder.Services.Configure<MetricsScrapeOptions>(builder.Configuration.GetSection(MetricsScrapeOptions.SectionName));
 
         // Suppress the default prometheus-net collectors (process/runtime). Called on the
         // disabled path too, so an off switch leaves no collector behind.
@@ -91,6 +92,8 @@ public static class MetricsServiceExtensions
         if (!options.Enabled)
             return app;
 
+        if (options.RequireScrapeToken)
+            app.UseMiddleware<MetricsScrapeTokenMiddleware>(ResolvePath(options));
         app.UseMiddleware<HttpMetricsMiddleware>();
         app.MapMetrics(ResolvePath(options)).AllowAnonymous();
 

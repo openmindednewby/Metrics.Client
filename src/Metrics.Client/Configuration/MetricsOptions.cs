@@ -24,4 +24,9 @@ public sealed class MetricsOptions
     /// The path where the Prometheus /metrics endpoint is exposed. Default: /metrics.
     /// </summary>
     public string MetricsPath { get; set; } = "/metrics";
+
+    /// <summary>
+    /// Requires <c>Authorization: Bearer</c> = <see cref="MetricsScrapeOptions.Token"/> on the scrape path. Default: false.
+    /// </summary>
+    public bool RequireScrapeToken { get; set; }
 }
