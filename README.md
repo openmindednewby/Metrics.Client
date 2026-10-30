@@ -144,6 +144,26 @@ Keep both calls (`AddPrometheusMetrics` + `UsePrometheusMetrics`) in `Program.cs
 is config, not code. `UsePrometheusMetrics` without `AddPrometheusMetrics` keeps the old
 defaults (enabled, `/metrics`).
 
+### Custom metrics with guarded labels (since 2.4.0)
+
+Create your own metrics through `GuardedMetrics` so a banned label fails at startup, not in Prometheus:
+
+```csharp
+using Metrics.Client.Labels;
+
+private static readonly Counter Orders = GuardedMetrics.CreateCounter(
+    "orders_total", "Orders placed.", new CounterConfiguration { LabelNames = ["service", "tenant"] });
+
+Orders.WithLabels(ServiceName, tenant.Bounded()).Inc();
+```
+
+- `MetricLabelNotAllowedException` is thrown for user / email / request, trace, span or correlation id / path, url,
+  query / ip / user agent / message labels (any casing, `_` or `-`), for `tenant` on an `http_*` metric, and for
+  more than 8 labels.
+- `tenant.Bounded()` admits the first 100 distinct values process-wide and maps the rest to `other`; pass your own
+  `new BoundedLabel(capacity)` for a separate budget. Thread-safe.
+- Rule: BaseClient/docs/code-standards/observability-pillars.md §7 "Few metric labels" (D-OBS7-3).
+
 ## Prometheus Scrape Config
 
 ```yaml
