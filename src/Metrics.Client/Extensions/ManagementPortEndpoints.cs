@@ -1,23 +1,25 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Routing;
 
 namespace Metrics.Client.Extensions;
 
 internal static class ManagementPortEndpoints
 {
-    private const int PublicPortNotFoundOrder = int.MaxValue;
-
-    internal static void RestrictToManagementPort(
-        IEndpointRouteBuilder endpoints,
-        IEndpointConventionBuilder endpoint,
-        string path,
-        int managementPort)
+    internal static void RestrictToManagementPort(IEndpointConventionBuilder endpoint, int managementPort)
     {
-        endpoint.RequireHost($"*:{managementPort}");
-        endpoints.Map(path, () => Results.NotFound())
-            .AllowAnonymous()
-            .ExcludeFromDescription()
-            .WithOrder(PublicPortNotFoundOrder);
+        endpoint.Add(builder =>
+        {
+            var next = builder.RequestDelegate
+                ?? throw new InvalidOperationException("A management endpoint has no request delegate.");
+            builder.RequestDelegate = context => context.Connection.LocalPort == managementPort
+                ? next(context)
+                : RespondNotFound(context);
+        });
+    }
+
+    private static Task RespondNotFound(HttpContext context)
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return Task.CompletedTask;
     }
 }

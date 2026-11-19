@@ -3,6 +3,7 @@ using Metrics.Client.Extensions;
 using Metrics.Client.Tests.Middleware;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Shouldly;
@@ -21,9 +22,9 @@ public sealed class MetricsManagementPortTests
     {
         await using var app = await StartAsync(new(), enableManagementPort: true);
 
-        var response = await GetAsync(app, PublicPort, ScrapePath);
+        var status = await GetAsync(app, PublicPort, ScrapePath);
 
-        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+        status.ShouldBe(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -31,9 +32,9 @@ public sealed class MetricsManagementPortTests
     {
         await using var app = await StartAsync(new(), enableManagementPort: true);
 
-        var response = await GetAsync(app, ManagementPort, ScrapePath);
+        var status = await GetAsync(app, ManagementPort, ScrapePath);
 
-        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        status.ShouldBe(HttpStatusCode.OK);
     }
 
     [Fact]
@@ -41,9 +42,9 @@ public sealed class MetricsManagementPortTests
     {
         await using var app = await StartAsync(new() { ["Metrics:EnableManagementPort"] = "true" }, enableManagementPort: false);
 
-        var response = await GetAsync(app, PublicPort, ScrapePath);
+        var status = await GetAsync(app, PublicPort, ScrapePath);
 
-        response.StatusCode.ShouldBe(HttpStatusCode.NotFound);
+        status.ShouldBe(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -51,16 +52,31 @@ public sealed class MetricsManagementPortTests
     {
         await using var app = await StartAsync(new(), enableManagementPort: false);
 
-        var response = await GetAsync(app, PublicPort, ScrapePath);
+        var status = await GetAsync(app, PublicPort, ScrapePath);
 
-        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        status.ShouldBe(HttpStatusCode.OK);
     }
 
-    private static async Task<HttpResponseMessage> GetAsync(WebApplication app, int port, string path)
+    [Fact]
+    public async Task UsePrometheusMetrics_WithSpoofedManagementHostOnPublicPort_Returns404()
     {
-        using var client = app.GetTestClient();
-        client.BaseAddress = new Uri($"http://localhost:{port}/");
-        return await client.GetAsync(path);
+        await using var app = await StartAsync(new(), enableManagementPort: true);
+
+        var status = await GetAsync(app, PublicPort, ScrapePath, host: $"localhost:{ManagementPort}");
+
+        status.ShouldBe(HttpStatusCode.NotFound);
+    }
+
+    private static async Task<HttpStatusCode> GetAsync(WebApplication app, int localPort, string path, string host = "localhost")
+    {
+        var context = await app.GetTestServer().SendAsync(request =>
+        {
+            request.Connection.LocalPort = localPort;
+            request.Request.Method = HttpMethods.Get;
+            request.Request.Path = path;
+            request.Request.Host = new HostString(host);
+        });
+        return (HttpStatusCode)context.Response.StatusCode;
     }
 
     private static async Task<WebApplication> StartAsync(Dictionary<string, string?> settings, bool enableManagementPort)
