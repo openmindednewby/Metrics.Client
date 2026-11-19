@@ -20,6 +20,12 @@ app.UsePrometheusMetrics();
 await app.RunAsync();
 ```
 
+## Management port (MGMT-PORT-1)
+
+Set `Metrics:EnableManagementPort=true` (or `o.EnableManagementPort = true`) to serve the scrape path only on
+`ManagementPort` (default 8081, through `RequireHost("*:8081")`); every other port answers 404. Kestrel must also
+listen on that port, for example `ASPNETCORE_HTTP_PORTS=8080;8081`. Unset, the scrape path answers on every port, as before.
+
 ## Metrics Collected
 
 | Metric | Type | Labels | Description |

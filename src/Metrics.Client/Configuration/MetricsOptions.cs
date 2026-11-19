@@ -10,6 +10,8 @@ public sealed class MetricsOptions
     /// </summary>
     public const string SectionName = "Metrics";
 
+    public const int DefaultManagementPort = 8081;
+
     /// <summary>
     /// The service name label applied to all metrics.
     /// </summary>
@@ -29,4 +31,8 @@ public sealed class MetricsOptions
     /// Requires <c>Authorization: Bearer</c> = <see cref="MetricsScrapeOptions.Token"/> on the scrape path. Default: false.
     /// </summary>
     public bool RequireScrapeToken { get; set; }
+
+    public bool EnableManagementPort { get; set; }
+
+    public int ManagementPort { get; set; } = DefaultManagementPort;
 }

@@ -95,7 +95,9 @@ public static class MetricsServiceExtensions
         if (options.RequireScrapeToken)
             app.UseMiddleware<MetricsScrapeTokenMiddleware>(ResolvePath(options));
         app.UseMiddleware<HttpMetricsMiddleware>();
-        app.MapMetrics(ResolvePath(options)).AllowAnonymous();
+        var scrape = app.MapMetrics(ResolvePath(options)).AllowAnonymous();
+        if (options.EnableManagementPort)
+            ManagementPortEndpoints.RestrictToManagementPort(app, scrape, ResolvePath(options), options.ManagementPort);
 
         return app;
     }
