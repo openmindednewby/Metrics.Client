@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Prometheus;
+using ServiceDefaults.HealthChecks;
 
 namespace Metrics.Client.Extensions;
 
@@ -97,7 +98,7 @@ public static class MetricsServiceExtensions
         app.UseMiddleware<HttpMetricsMiddleware>();
         var scrape = app.MapMetrics(ResolvePath(options)).AllowAnonymous();
         if (options.EnableManagementPort)
-            ManagementPortEndpoints.RestrictToManagementPort(scrape, options.ManagementPort);
+            scrape.RequireManagementPort(options.ManagementPort);
 
         return app;
     }

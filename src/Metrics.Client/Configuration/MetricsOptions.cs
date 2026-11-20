@@ -1,3 +1,5 @@
+using ServiceDefaults.HealthChecks;
+
 namespace Metrics.Client.Configuration;
 
 /// <summary>
@@ -10,7 +12,7 @@ public sealed class MetricsOptions
     /// </summary>
     public const string SectionName = "Metrics";
 
-    public const int DefaultManagementPort = 8081;
+    public const int DefaultManagementPort = HealthCheckDefaultsOptions.DefaultManagementPort;
 
     /// <summary>
     /// The service name label applied to all metrics.
