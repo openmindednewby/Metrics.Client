@@ -20,7 +20,7 @@
     <Description>Lightweight Prometheus metrics for ASP.NET Core services. Auto-collects HTTP request duration, request count, and active requests with low-cardinality labels.</Description>
 
     <!-- Versioning -->
-    <Version>2.5.1</Version>
+    <Version>2.6.0</Version>
     <AssemblyVersion>2.5.1.0</AssemblyVersion>
     <FileVersion>2.5.1.0</FileVersion>
 
